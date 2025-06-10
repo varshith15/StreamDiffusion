@@ -17,9 +17,11 @@
 # limitations under the License.
 #
 
+import os
+import tempfile
 import onnx_graphsurgeon as gs
 import torch
-from onnx import shape_inference
+from onnx import shape_inference, save_model, load
 from polygraphy.backend.onnx.loader import fold_constants
 
 
@@ -54,7 +56,17 @@ class Optimizer:
     def infer_shapes(self, return_onnx=False):
         onnx_graph = gs.export_onnx(self.graph)
         if onnx_graph.ByteSize() > 2147483648:
-            raise TypeError("ERROR: model size exceeds supported 2GB limit")
+            temp_dir = tempfile.TemporaryDirectory().name
+            os.makedirs(temp_dir, exist_ok=True)
+            onnx_orig_path = os.path.join(temp_dir, 'model.onnx')
+            onnx_inferred_path = os.path.join(temp_dir, 'inferred.onnx')
+            save_model(onnx_graph,
+                onnx_orig_path,
+                save_as_external_data=True,
+                all_tensors_to_one_file=True,
+                convert_attribute=False)
+            shape_inference.infer_shapes_path(onnx_orig_path, onnx_inferred_path)
+            onnx_graph = load(onnx_inferred_path)
         else:
             onnx_graph = shape_inference.infer_shapes(onnx_graph)
 
@@ -339,7 +351,6 @@ class UNetWithControlNet(BaseModel):
             "timestep": {0: "2B"},
             "encoder_hidden_states": {0: "2B"},
             "controlnet_images": {1: "2B", 3: "8H", 4: "8W"},
-            "controlnet_scales": {0: "N"},
             "latent": {0: "2B", 2: "H", 3: "W"},
         }
 
@@ -375,9 +386,9 @@ class UNetWithControlNet(BaseModel):
                 (self.num_controlnets, max_batch, 3, max_image_height, max_image_width),
             ],
             "controlnet_scales": [
-                (self.num_controlnets,),
-                (self.num_controlnets,),
-                (self.num_controlnets,),
+                (self.num_controlnets, 1),
+                (self.num_controlnets, 1),
+                (self.num_controlnets, 1),
             ],
         }
 
@@ -389,7 +400,7 @@ class UNetWithControlNet(BaseModel):
             "encoder_hidden_states": (2 * batch_size, self.text_maxlen, self.embedding_dim),
             "latent": (2 * batch_size, 4, latent_height, latent_width),
             "controlnet_images": (self.num_controlnets, 2 * batch_size, 3, image_height, image_width),
-            "controlnet_scales": (self.num_controlnets,),
+            "controlnet_scales": (self.num_controlnets, 1),
         }
 
     def get_sample_input(self, batch_size, image_height, image_width):
@@ -404,7 +415,7 @@ class UNetWithControlNet(BaseModel):
             torch.randn(
                 self.num_controlnets, 2 * batch_size, 3, image_height, image_width, dtype=dtype, device=self.device
             ),
-            torch.randn(self.num_controlnets, dtype=torch.float32, device=self.device),
+            torch.randn(self.num_controlnets, 1, dtype=torch.float32, device=self.device),
         )
 
 

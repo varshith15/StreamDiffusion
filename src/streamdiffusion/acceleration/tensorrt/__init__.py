@@ -18,11 +18,11 @@ class UNet2DConditionControlNetModel(torch.nn.Module):
     def __init__(
         self,
         unet,
-        controlnets: list[ControlNetModel],
+        controlnets: ControlNetModel,
     ):
         super().__init__()
-        self.unet = unet.to(unet.device, dtype=unet.dtype)
-        self.controlnets = [controlnet.to(unet.device, dtype=unet.dtype) for controlnet in controlnets]
+        self.unet = unet
+        self.controlnets = controlnets
 
     def forward(
         self,
@@ -61,7 +61,7 @@ class UNet2DConditionControlNetModel(torch.nn.Module):
             down_block_additional_residuals=down_block_res_samples,
             mid_block_additional_residual=mid_block_res_sample,
             return_dict=False,
-        )
+        )[0]
         return noise_pred
 
 
@@ -142,8 +142,7 @@ def compile_control_unet(
     engine_build_options: dict = {},
 ):
     unet = unet.to(torch.device("cuda"), dtype=torch.float16)
-    unet.unet = unet.unet.to(torch.device("cuda"), dtype=torch.float16)
-    unet.controlnets = [controlnet.to(torch.device("cuda"), dtype=torch.float16) for controlnet in unet.controlnets]
+    
     builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
     builder.build(
         onnx_path,
