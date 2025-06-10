@@ -310,12 +310,19 @@ class StreamDiffusion:
         else:
             x_t_latent_plus_uc = x_t_latent
 
+        start_unet = torch.cuda.Event(enable_timing=True)
+        end_unet = torch.cuda.Event(enable_timing=True)
+        start_unet.record()
         model_pred = self.unet(
             x_t_latent_plus_uc,
             t_list,
             encoder_hidden_states=self.prompt_embeds,
             return_dict=False,
         )[0]
+        end_unet.record()
+        torch.cuda.synchronize()
+        unet_inference_time = start_unet.elapsed_time(end_unet) / 1000
+        print(f"UNet inference time: {unet_inference_time:.4f} seconds")
 
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             noise_pred_text = model_pred[1:]

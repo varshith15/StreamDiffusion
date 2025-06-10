@@ -23,7 +23,7 @@ def download_image(url: str):
 
 def run(
     iterations: int = 100,
-    model_id_or_path: str = "KBlueLeaf/kohaku-v2.1",
+    model_id_or_path: str = "stabilityai/sd-turbo",
     lora_dict: Optional[Dict[str, float]] = None,
     prompt: str = "1girl with brown dog hair, thick glasses, smiling",
     negative_prompt: str = "bad image , bad quality",
@@ -32,7 +32,7 @@ def run(
     width: int = 512,
     height: int = 512,
     warmup: int = 10,
-    acceleration: Literal["none", "xformers", "tensorrt"] = "xformers",
+    acceleration: Literal["none", "xformers", "tensorrt"] = "tensorrt",
     device_ids: Optional[List[int]] = None,
     use_denoising_batch: bool = True,
     seed: int = 2,
@@ -123,6 +123,8 @@ def run(
 
         torch.cuda.synchronize()
         results.append(start.elapsed_time(end))
+    
+    
 
     print(f"Average time: {sum(results) / len(results)}ms")
     print(f"Average FPS: {1000 / (sum(results) / len(results))}")

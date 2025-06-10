@@ -2,7 +2,7 @@ import gc
 import os
 
 import torch
-from diffusers import AutoencoderKL, UNet2DConditionModel
+from diffusers import AutoencoderKL, UNet2DConditionModel, ControlNetModel
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import (
     retrieve_latents,
 )
@@ -12,6 +12,57 @@ from ...pipeline import StreamDiffusion
 from .builder import EngineBuilder, create_onnx_path
 from .engine import AutoencoderKLEngine, UNet2DConditionModelEngine
 from .models import VAE, BaseModel, UNet, VAEEncoder
+
+
+class UNet2DConditionControlNetModel(torch.nn.Module):
+    def __init__(
+        self,
+        unet,
+        controlnets: list[ControlNetModel],
+    ):
+        super().__init__()
+        self.unet = unet.to(unet.device, dtype=unet.dtype)
+        self.controlnets = [controlnet.to(unet.device, dtype=unet.dtype) for controlnet in controlnets]
+
+    def forward(
+        self,
+        sample,
+        timestep,
+        encoder_hidden_states,
+        controlnet_images,
+        controlnet_scales,
+    ):
+        for i, (controlnet_image, conditioning_scale, controlnet) in enumerate(
+            zip(controlnet_images, controlnet_scales, self.controlnets)
+        ):
+            down_samples, mid_sample = controlnet(
+                sample,
+                timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                controlnet_cond=controlnet_image,
+                conditioning_scale=conditioning_scale,
+                return_dict=False,
+            )
+
+            # merge samples
+            if i == 0:
+                down_block_res_samples, mid_block_res_sample = down_samples, mid_sample
+            else:
+                down_block_res_samples = [
+                    samples_prev + samples_curr
+                    for samples_prev, samples_curr in zip(down_block_res_samples, down_samples)
+                ]
+                mid_block_res_sample += mid_sample
+
+        noise_pred = self.unet(
+            sample,
+            timestep,
+            encoder_hidden_states=encoder_hidden_states,
+            down_block_additional_residuals=down_block_res_samples,
+            mid_block_additional_residual=mid_block_res_sample,
+            return_dict=False,
+        )
+        return noise_pred
 
 
 class TorchVAEEncoder(torch.nn.Module):
@@ -72,6 +123,27 @@ def compile_unet(
     engine_build_options: dict = {},
 ):
     unet = unet.to(torch.device("cuda"), dtype=torch.float16)
+    builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
+    builder.build(
+        onnx_path,
+        onnx_opt_path,
+        engine_path,
+        opt_batch_size=opt_batch_size,
+        **engine_build_options,
+    )
+
+def compile_control_unet(
+    unet: UNet2DConditionControlNetModel,
+    model_data: BaseModel,
+    onnx_path: str,
+    onnx_opt_path: str,
+    engine_path: str,
+    opt_batch_size: int = 1,
+    engine_build_options: dict = {},
+):
+    unet = unet.to(torch.device("cuda"), dtype=torch.float16)
+    unet.unet = unet.unet.to(torch.device("cuda"), dtype=torch.float16)
+    unet.controlnets = [controlnet.to(torch.device("cuda"), dtype=torch.float16) for controlnet in unet.controlnets]
     builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
     builder.build(
         onnx_path,
