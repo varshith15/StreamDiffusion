@@ -430,7 +430,6 @@ def export_onnx(
             model,
             inputs,
             onnx_path,
-            export_params=True,
             opset_version=onnx_opset,
             do_constant_folding=True,
             input_names=model_data.get_input_names(),
@@ -448,7 +447,13 @@ def optimize_onnx(
     model_data: BaseModel,
 ):
     onnx_opt_graph = model_data.optimize(onnx.load(onnx_path))
-    onnx.save(onnx_opt_graph, onnx_opt_path)
+    onnx.save(onnx_opt_graph, 
+            onnx_opt_path, 
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location="weights.pb",
+            convert_attribute=False)
+    # onnx.checker.check_model(onnx_opt_path)
     del onnx_opt_graph
     gc.collect()
     torch.cuda.empty_cache()

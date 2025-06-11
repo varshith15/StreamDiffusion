@@ -55,20 +55,8 @@ class Optimizer:
 
     def infer_shapes(self, return_onnx=False):
         onnx_graph = gs.export_onnx(self.graph)
-        if onnx_graph.ByteSize() > 2147483648:
-            temp_dir = tempfile.TemporaryDirectory().name
-            os.makedirs(temp_dir, exist_ok=True)
-            onnx_orig_path = os.path.join(temp_dir, 'model.onnx')
-            onnx_inferred_path = os.path.join(temp_dir, 'inferred.onnx')
-            save_model(onnx_graph,
-                onnx_orig_path,
-                save_as_external_data=True,
-                all_tensors_to_one_file=True,
-                convert_attribute=False)
-            shape_inference.infer_shapes_path(onnx_orig_path, onnx_inferred_path)
-            onnx_graph = load(onnx_inferred_path)
-        else:
-            onnx_graph = shape_inference.infer_shapes(onnx_graph)
+        # Always use in-memory shape inference to avoid external data corruption
+        onnx_graph = shape_inference.infer_shapes(onnx_graph)
 
         self.graph = gs.import_onnx(onnx_graph)
         if return_onnx:
@@ -417,6 +405,21 @@ class UNetWithControlNet(BaseModel):
             ),
             torch.randn(self.num_controlnets, 1, dtype=torch.float32, device=self.device),
         )
+    
+    def optimize(self, onnx_graph):
+        opt = Optimizer(onnx_graph, verbose=self.verbose)
+        opt.info(self.name + ": original")
+        opt.cleanup()
+        opt.info(self.name + ": cleanup")
+        opt.fold_constants()
+        opt.info(self.name + ": fold constants")
+        # Skip shape inference for ControlNet models to avoid corruption
+        # opt.infer_shapes()
+        # opt.info(self.name + ": shape inference")
+        print("Skipping shape inference for ControlNet models to avoid corruption")
+        onnx_opt_graph = opt.cleanup(return_onnx=True)
+        opt.info(self.name + ": finished")
+        return onnx_opt_graph
 
 
 class VAE(BaseModel):

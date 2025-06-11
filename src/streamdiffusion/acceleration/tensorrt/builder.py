@@ -1,8 +1,10 @@
 import gc
 import os
 from typing import *
+from pathlib import Path
 
 import torch
+from onnx import shape_inference
 
 from .models import BaseModel
 from .utilities import (
@@ -42,7 +44,7 @@ class EngineBuilder:
         build_static_batch: bool = False,
         build_dynamic_shape: bool = False,
         build_all_tactics: bool = False,
-        onnx_opset: int = 17,
+        onnx_opset: int = 20,
         force_engine_build: bool = False,
         force_onnx_export: bool = False,
         force_onnx_optimize: bool = False,
@@ -67,6 +69,8 @@ class EngineBuilder:
             print(f"Found cached model: {onnx_opt_path}")
         else:
             print(f"Generating optimizing model: {onnx_opt_path}")
+            onnx_model_path = str(Path(onnx_path).absolute().as_posix())
+            shape_inference.infer_shapes_path(onnx_model_path, onnx_model_path)
             optimize_onnx(
                 onnx_path=onnx_path,
                 onnx_opt_path=onnx_opt_path,

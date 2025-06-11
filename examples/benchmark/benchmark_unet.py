@@ -87,7 +87,7 @@ def run(
         controlnet_images = torch.randn(
             1, 3, 3, height, width, dtype=dtype, device=device
         )
-        controlnet_scales = torch.ones(1, dtype=dtype, device=device)
+        controlnet_scales = torch.ones(1, 1, dtype=dtype, device=device)
         
         # Create combined UNet+ControlNet model
         combined_model = UNet2DConditionControlNetModel(unet_torch, torch.nn.ModuleList([controlnet]))
@@ -201,14 +201,13 @@ def run(
             results.append(start_event.elapsed_time(end_event))
 
     print(f"\nBenchmark Results ({'ControlNet + UNet' if use_controlnet else 'UNet Only'}):")
-    print(f"Average time: {sum(results) / len(results)}ms")
-    print(f"Average FPS: {1000 / (sum(results) / len(results))}")
+    print(f"Average latency: {sum(results) / len(results):.2f}ms")
     import numpy as np
 
-    fps_arr = 1000 / np.array(results)
-    print(f"Max FPS: {np.max(fps_arr)}")
-    print(f"Min FPS: {np.min(fps_arr)}")
-    print(f"Std: {np.std(fps_arr)}")
+    latency_arr = np.array(results)
+    print(f"Min latency: {np.min(latency_arr):.2f}ms")
+    print(f"Max latency: {np.max(latency_arr):.2f}ms")
+    print(f"Std latency: {np.std(latency_arr):.2f}ms")
 
 
 if __name__ == "__main__":
