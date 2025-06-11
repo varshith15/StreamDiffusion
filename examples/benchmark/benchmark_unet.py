@@ -22,6 +22,7 @@ def run(
     width: int = 512,
     height: int = 512,
     warmup: int = 10,
+    steps: int = 3,
     use_controlnet: bool = False,
     controlnet_model_id: str = "thibaud/controlnet-sd21-depth-diffusers",
 ):
@@ -40,6 +41,8 @@ def run(
         The height of the image, by default 512.
     warmup : int, optional
         The number of warmup steps to perform, by default 10.
+    steps : int, optional
+        The number of denoising steps to run, by default 3.
     use_controlnet : bool, optional
         Whether to use ControlNet, by default False.
     controlnet_model_id : str, optional
@@ -60,11 +63,12 @@ def run(
     latent_width = int(width // 8)
 
     latent_model_input = torch.randn(
-        3, 4, latent_height, latent_width, dtype=dtype, device=device
+        steps, 4, latent_height, latent_width, dtype=dtype, device=device
     )
-    timestep = torch.tensor([32, 32, 45], dtype=torch.int64, device=device) # Example timesteps
+    # Generate timesteps for the specified number of steps
+    timestep = torch.randint(0, 1000, (steps,), dtype=torch.int64, device=device)
     encoder_hidden_states = torch.randn(
-        3, 77, 1024, dtype=dtype, device=device
+        steps, 77, 1024, dtype=dtype, device=device
     )
 
     print(f"Loading UNet model from {model_id_or_path}...")
@@ -85,21 +89,21 @@ def run(
         
         # Create dummy ControlNet inputs (shape: (num_controlnets, batch_size, channels, height, width))
         controlnet_images = torch.randn(
-            1, 3, 3, height, width, dtype=dtype, device=device
+            1, steps, 3, height, width, dtype=dtype, device=device
         )
-        controlnet_scales = torch.ones(1, 1, dtype=dtype, device=device)
+        controlnet_scales = torch.ones(1, steps, dtype=dtype, device=device)
         
         # Create combined UNet+ControlNet model
         combined_model = UNet2DConditionControlNetModel(unet_torch, torch.nn.ModuleList([controlnet]))
         
-        unet_engine_path = f"{engine_dir}/controlnet_unet.engine"
+        unet_engine_path = f"{engine_dir}/controlnet_unet_steps_{steps}.engine"
         
         print("Compiling UNet+ControlNet TensorRT engine...")
         unet_model_data = UNetWithControlNet(
             fp16=True,
             device=device,
             num_controlnets=1,
-            max_batch_size=3,
+            max_batch_size=steps,
             min_batch_size=1,
             embedding_dim=unet_torch.config.cross_attention_dim,
             unet_dim=unet_torch.config.in_channels,
@@ -110,7 +114,7 @@ def run(
             create_onnx_path("controlnet_unet", onnx_dir, opt=False),
             create_onnx_path("controlnet_unet", onnx_dir, opt=True),
             unet_engine_path,
-            opt_batch_size=3,
+            opt_batch_size=steps,
         )
         del combined_model, unet_torch, controlnet
         torch.cuda.empty_cache()
@@ -149,13 +153,13 @@ def run(
             results.append(start_event.elapsed_time(end_event))
 
     else:
-        unet_engine_path = f"{engine_dir}/unet.engine"
+        unet_engine_path = f"{engine_dir}/unet_steps_{steps}.engine"
 
         print("Compiling UNet TensorRT engine...")
         unet_model_data = UNet(
             fp16=True,
             device=device,
-            max_batch_size=3, # Max batch size for dummy inputs
+            max_batch_size=steps, # Max batch size for dummy inputs
             min_batch_size=1, # Min batch size for dummy inputs
             embedding_dim=unet_torch.config.cross_attention_dim, # Typically 768
             unet_dim=unet_torch.config.in_channels, # Typically 4
@@ -166,7 +170,7 @@ def run(
             create_onnx_path("unet", onnx_dir, opt=False),
             create_onnx_path("unet", onnx_dir, opt=True),
             unet_engine_path,
-            opt_batch_size=3,
+            opt_batch_size=steps,
         )
         del unet_torch
         torch.cuda.empty_cache()
