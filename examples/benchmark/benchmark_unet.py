@@ -24,7 +24,7 @@ def run(
     warmup: int = 10,
     steps: int = 3,
     use_controlnet: bool = False,
-    controlnet_model_id: str = "thibaud/controlnet-sd21-depth-diffusers",
+    num_controlnets: int = 1,
 ):
     """
     Benchmarks the UNet forward pass using TensorRT.
@@ -45,8 +45,8 @@ def run(
         The number of denoising steps to run, by default 3.
     use_controlnet : bool, optional
         Whether to use ControlNet, by default False.
-    controlnet_model_id : str, optional
-        The ControlNet model id to load, by default "thibaud/controlnet-sd21-depth-diffusers".
+    num_controlnets : int, optional
+        Number of ControlNet models to use (1 or 2), by default 1.
     """
 
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -82,27 +82,44 @@ def run(
     os.makedirs(onnx_dir, exist_ok=True)
 
     if use_controlnet:
-        print(f"Loading ControlNet model from {controlnet_model_id}...")
-        controlnet = ControlNetModel.from_pretrained(
-            controlnet_model_id, torch_dtype=dtype
-        ).to(device)
+        if num_controlnets not in [1, 2]:
+            raise ValueError("num_controlnets must be either 1 or 2")
+            
+        controlnet_models = [
+            "thibaud/controlnet-sd21-depth-diffusers",
+            "thibaud/controlnet-sd21-canny-diffusers"
+        ]
+        
+        print(f"Loading {num_controlnets} ControlNet model(s)...")
+        controlnets = []
+        for i in range(num_controlnets):
+            try:
+                controlnet = ControlNetModel.from_pretrained(
+                    controlnet_models[i], torch_dtype=dtype
+                ).to(device)
+                controlnets.append(controlnet)
+            except Exception as e:
+                print(f"Error loading {controlnet_models[i]}: {str(e)}")
+                raise
         
         # Create dummy ControlNet inputs (shape: (num_controlnets, batch_size, channels, height, width))
         controlnet_images = torch.randn(
-            1, steps, 3, height, width, dtype=dtype, device=device
+            num_controlnets, steps, 3, height, width, dtype=dtype, device=device
         )
-        controlnet_scales = torch.ones(1, steps, dtype=dtype, device=device)
+        # Create scales with shape (num_controlnets, 1)
+        controlnet_scales = torch.ones(num_controlnets, 1, dtype=dtype, device=device)
         
         # Create combined UNet+ControlNet model
-        combined_model = UNet2DConditionControlNetModel(unet_torch, torch.nn.ModuleList([controlnet]))
+        combined_model = UNet2DConditionControlNetModel(unet_torch, torch.nn.ModuleList(controlnets))
         
-        unet_engine_path = f"{engine_dir}/controlnet_unet_steps_{steps}.engine"
+        # Use a unique engine path that includes both steps and num_controlnets
+        unet_engine_path = f"{engine_dir}/controlnet_unet_steps_{steps}_num_controlnets_{num_controlnets}.engine"
         
         print("Compiling UNet+ControlNet TensorRT engine...")
         unet_model_data = UNetWithControlNet(
             fp16=True,
             device=device,
-            num_controlnets=1,
+            num_controlnets=num_controlnets,
             max_batch_size=steps,
             min_batch_size=1,
             embedding_dim=unet_torch.config.cross_attention_dim,
@@ -116,7 +133,7 @@ def run(
             unet_engine_path,
             opt_batch_size=steps,
         )
-        del combined_model, unet_torch, controlnet
+        del combined_model, unet_torch, controlnets
         torch.cuda.empty_cache()
 
         print("Loading UNet+ControlNet TensorRT engine...")

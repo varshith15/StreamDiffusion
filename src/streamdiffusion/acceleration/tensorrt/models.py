@@ -338,7 +338,8 @@ class UNetWithControlNet(BaseModel):
             "sample": {0: "2B", 2: "H", 3: "W"},
             "timestep": {0: "2B"},
             "encoder_hidden_states": {0: "2B"},
-            "controlnet_images": {1: "2B", 3: "8H", 4: "8W"},
+            "controlnet_images": {0: "C", 1: "2B", 3: "8H", 4: "8W"},
+            "controlnet_scales": {0: "C"},
             "latent": {0: "2B", 2: "H", 3: "W"},
         }
 
