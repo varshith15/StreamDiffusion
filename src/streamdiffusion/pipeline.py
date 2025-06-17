@@ -28,6 +28,7 @@ class StreamDiffusion:
         use_controlnet: bool = False,
         controlnet_models: Optional[List[ControlNetModel]] = None,
         controlnet_scales: Optional[List[float]] = None,
+        controlnet_images: Optional[List[PIL.Image.Image]] = None,
     ) -> None:
         self.device = pipe.device
         self.dtype = torch_dtype
@@ -48,6 +49,7 @@ class StreamDiffusion:
         self.use_controlnet = use_controlnet
         self.controlnet_models = controlnet_models if controlnet_models is not None else []
         self.num_controlnets = len(self.controlnet_models)
+        self.controlnet_images = controlnet_images
         
         # Set default scales if not provided
         if controlnet_scales is None:
@@ -473,13 +475,12 @@ class StreamDiffusion:
 
     @torch.no_grad()
     def __call__(
-        self, x: Union[torch.Tensor, PIL.Image.Image, np.ndarray] = None
+        self, x: Union[torch.Tensor, PIL.Image.Image, np.ndarray] = None, controlnet_images: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
         
-        controlnet_images = None
         if x is not None:
             x = self.image_processor.preprocess(x, self.height, self.width).to(
                 device=self.device, dtype=self.dtype
@@ -490,12 +491,6 @@ class StreamDiffusion:
                     time.sleep(self.inference_time_ema)
                     return self.prev_image_result
             x_t_latent = self.encode_image(x)
-            
-            # Prepare ControlNet images (use same image as control image for now)
-            if self.use_controlnet and self.num_controlnets > 0:
-                # Prepare control images with proper shape: (num_controlnets, batch_size, 3, height, width)
-                control_image = x.expand(self.batch_size, -1, -1, -1)  # (batch_size, 3, height, width)
-                controlnet_images = control_image.unsqueeze(0).expand(self.num_controlnets, -1, -1, -1, -1)  # (num_controlnets, batch_size, 3, height, width)
         else:
             # TODO: check the dimension of x_t_latent
             x_t_latent = torch.randn((1, 4, self.latent_height, self.latent_width)).to(

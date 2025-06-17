@@ -1,8 +1,10 @@
 import os
 import sys
+import time
 from typing import Literal, Dict, Optional, List
 
 import fire
+from PIL import Image
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -13,11 +15,11 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def main(
-    input: str = os.path.join(CURRENT_DIR, "..", "..", "images", "inputs", "input.png"),
+    input: str = os.path.join(CURRENT_DIR, "..", "..", "images", "inputs", "chillguy.png"),
     output: str = os.path.join(CURRENT_DIR, "..", "..", "images", "outputs", "output.png"),
     model_id_or_path: str = "stabilityai/sd-turbo",
     lora_dict: Optional[Dict[str, float]] = None,
-    prompt: str = "1girl with brown dog hair, thick glasses, smiling",
+    prompt: str = "elon musk",
     negative_prompt: str = "low quality, bad quality, blurry, low resolution",
     width: int = 512,
     height: int = 512,
@@ -27,9 +29,10 @@ def main(
     cfg_type: Literal["none", "full", "self", "initialize"] = "self",
     seed: int = 2,
     delta: float = 0.5,
-    use_controlnet: bool = False,
-    controlnet_model_ids: Optional[List[str]] = None,
-    controlnet_scales: Optional[List[float]] = None,
+    use_controlnet: bool = True,
+    controlnet_model_ids: Optional[List[str]] = ["thibaud/controlnet-sd21-depth-diffusers"],
+    controlnet_scales: Optional[List[float]] = [0.5],
+    controlnet_image_paths: Optional[List[str]] = None,
 ):
     """
     Initializes the StreamDiffusionWrapper.
@@ -77,15 +80,39 @@ def main(
     controlnet_scales : Optional[List[float]], optional
         List of ControlNet conditioning scales, by default None.
         If None, defaults to [1.0] for each ControlNet.
+    controlnet_image_paths : Optional[List[str]], optional
+        List of paths to ControlNet conditioning images, by default None.
+        If None and use_controlnet is True, will use default depth image.
+        Example: ["path/to/depth.png", "path/to/canny.png"]
     """
 
     if guidance_scale <= 1.0:
         cfg_type = "none"
 
-    # Set default ControlNet models if enabled but no models specified
-    if use_controlnet and controlnet_model_ids is None:
-        controlnet_model_ids = ["thibaud/controlnet-sd21-depth-diffusers"]
-        print(f"Using default ControlNet model: {controlnet_model_ids}")
+    # Set default ControlNet models and image paths if enabled but not specified
+    if use_controlnet:
+        if controlnet_model_ids is None:
+            controlnet_model_ids = ["thibaud/controlnet-sd21-depth-diffusers"]
+            print(f"Using default ControlNet model: {controlnet_model_ids}")
+        
+        if controlnet_image_paths is None:
+            # Default depth image path
+            default_depth_path = os.path.join(CURRENT_DIR, "..", "..", "images", "inputs", "chillguy_depth.png")
+            controlnet_image_paths = [default_depth_path]
+            print(f"Using default ControlNet image: {controlnet_image_paths}")
+
+    # Load ControlNet images from paths (just like input image)
+    controlnet_images = None
+    if use_controlnet and controlnet_image_paths:
+        controlnet_images = []
+        for image_path in controlnet_image_paths:
+            try:
+                control_image = Image.open(image_path).convert("RGB")
+                controlnet_images.append(control_image)
+                print(f"Loaded ControlNet image: {image_path}")
+            except Exception as e:
+                print(f"Error loading ControlNet image {image_path}: {e}")
+                raise
 
     stream = StreamDiffusionWrapper(
         model_id_or_path=model_id_or_path,
@@ -103,6 +130,7 @@ def main(
         use_controlnet=use_controlnet,
         controlnet_model_ids=controlnet_model_ids,
         controlnet_scales=controlnet_scales,
+        controlnet_images=controlnet_images,
     )
 
     stream.prepare(
@@ -115,10 +143,13 @@ def main(
 
     image_tensor = stream.preprocess_image(input)
 
-    for _ in range(stream.batch_size - 1):
-        stream(image=image_tensor)
+    st = time.time()
+    for _ in range(20):
+        for _ in range(stream.batch_size - 1):
+            stream(image=image_tensor)
 
-    output_image = stream(image=image_tensor)
+        output_image = stream(image=image_tensor)
+    print(f"Time taken: {stream.batch_size * 20 / (time.time() - st)} fps")
     output_image.save(output)
 
 

@@ -50,6 +50,7 @@ class StreamDiffusionWrapper:
         use_controlnet: bool = False,
         controlnet_model_ids: Optional[List[str]] = None,
         controlnet_scales: Optional[List[float]] = None,
+        controlnet_images: Optional[List[Image.Image]] = None,
     ):
         """
         Initializes the StreamDiffusionWrapper.
@@ -120,10 +121,13 @@ class StreamDiffusionWrapper:
             Whether to use ControlNet or not, by default False.
         controlnet_model_ids : Optional[List[str]], optional
             List of ControlNet model IDs to load, by default None.
-            Example: ["thibaud/controlnet-sd21-depth-diffusers", "thibaud/controlnet-sd21-canny-diffusers"]
+            Example: ["lllyasviel/sd-controlnet-canny", "lllyasviel/sd-controlnet-depth"]
         controlnet_scales : Optional[List[float]], optional
             List of ControlNet conditioning scales, by default None.
             If None, defaults to [1.0] for each ControlNet.
+        controlnet_images : Optional[List[Image.Image]], optional
+            List of PIL Image objects for ControlNet conditioning, by default None.
+            Example: [PIL.Image.open("canny.png"), PIL.Image.open("depth.png")]
         """
         self.sd_turbo = "turbo" in model_id_or_path
 
@@ -166,6 +170,7 @@ class StreamDiffusionWrapper:
         self.use_controlnet = use_controlnet
         self.controlnet_model_ids = controlnet_model_ids if controlnet_model_ids is not None else []
         self.controlnet_scales = controlnet_scales
+        self.controlnet_images = controlnet_images
 
         self.stream: StreamDiffusion = self._load_model(
             model_id_or_path=model_id_or_path,
@@ -184,6 +189,7 @@ class StreamDiffusionWrapper:
             use_controlnet=use_controlnet,
             controlnet_model_ids=controlnet_model_ids,
             controlnet_scales=controlnet_scales,
+            controlnet_images=controlnet_images,
         )
 
         if device_ids is not None:
@@ -309,7 +315,12 @@ class StreamDiffusionWrapper:
         if isinstance(image, str) or isinstance(image, Image.Image):
             image = self.preprocess_image(image)
 
-        image_tensor = self.stream(image)
+        # Preprocess ControlNet images if using ControlNet
+        controlnet_images_tensor = None
+        if self.use_controlnet and self.controlnet_images:
+            controlnet_images_tensor = self.preprocess_controlnet_images(self.controlnet_images)
+
+        image_tensor = self.stream(image, controlnet_images_tensor)
         image = self.postprocess_image(image_tensor, output_type=self.output_type)
 
         if self.use_safety_checker:
@@ -368,6 +379,37 @@ class StreamDiffusionWrapper:
         else:
             return postprocess_image(image_tensor.cpu(), output_type=output_type)[0]
 
+    def preprocess_controlnet_images(self, controlnet_images: List[Image.Image]) -> torch.Tensor:
+        """
+        Preprocesses ControlNet images.
+
+        Parameters
+        ----------
+        controlnet_images : List[Image.Image]
+            List of PIL Image objects for ControlNet conditioning.
+
+        Returns
+        -------
+        torch.Tensor
+            The preprocessed ControlNet images with shape (num_controlnets, batch_size, 3, height, width).
+        """
+        processed_images = []
+        for control_image in controlnet_images:
+            # Resize and convert the PIL Image
+            control_image = control_image.convert("RGB").resize((self.width, self.height))
+            
+            # Preprocess using the same processor as the main image
+            control_tensor = self.stream.image_processor.preprocess(
+                control_image, self.height, self.width
+            ).to(device=self.device, dtype=self.dtype)
+            
+            # Expand to batch size
+            control_tensor = control_tensor.expand(self.batch_size, -1, -1, -1)
+            processed_images.append(control_tensor)
+        
+        # Stack all ControlNet images: (num_controlnets, batch_size, 3, height, width)
+        return torch.stack(processed_images, dim=0)
+
     def _load_model(
         self,
         model_id_or_path: str,
@@ -386,6 +428,7 @@ class StreamDiffusionWrapper:
         use_controlnet: bool = False,
         controlnet_model_ids: Optional[List[str]] = None,
         controlnet_scales: Optional[List[float]] = None,
+        controlnet_images: Optional[List[Image.Image]] = None,
     ) -> StreamDiffusion:
         """
         Loads the model.
@@ -437,6 +480,8 @@ class StreamDiffusionWrapper:
             List of ControlNet model IDs to load, by default None.
         controlnet_scales : Optional[List[float]], optional
             List of ControlNet conditioning scales, by default None.
+        controlnet_images : Optional[List[Image.Image]], optional
+            List of PIL Image objects for ControlNet conditioning, by default None.
 
         Returns
         -------
@@ -486,6 +531,7 @@ class StreamDiffusionWrapper:
             use_controlnet=use_controlnet,
             controlnet_models=controlnet_models,
             controlnet_scales=controlnet_scales,
+            controlnet_images=controlnet_images,
         )
         if not self.sd_turbo:
             if use_lcm_lora:
