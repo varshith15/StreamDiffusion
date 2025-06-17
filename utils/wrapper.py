@@ -6,7 +6,7 @@ from typing import List, Literal, Optional, Union, Dict
 
 import numpy as np
 import torch
-from diffusers import AutoencoderTiny, StableDiffusionPipeline
+from diffusers import AutoencoderTiny, StableDiffusionPipeline, ControlNetModel
 from PIL import Image
 
 from streamdiffusion import StreamDiffusion
@@ -47,6 +47,9 @@ class StreamDiffusionWrapper:
         seed: int = 2,
         use_safety_checker: bool = False,
         engine_dir: Optional[Union[str, Path]] = "engines",
+        use_controlnet: bool = False,
+        controlnet_model_ids: Optional[List[str]] = None,
+        controlnet_scales: Optional[List[float]] = None,
     ):
         """
         Initializes the StreamDiffusionWrapper.
@@ -113,6 +116,14 @@ class StreamDiffusionWrapper:
             The seed, by default 2.
         use_safety_checker : bool, optional
             Whether to use safety checker or not, by default False.
+        use_controlnet : bool, optional
+            Whether to use ControlNet or not, by default False.
+        controlnet_model_ids : Optional[List[str]], optional
+            List of ControlNet model IDs to load, by default None.
+            Example: ["thibaud/controlnet-sd21-depth-diffusers", "thibaud/controlnet-sd21-canny-diffusers"]
+        controlnet_scales : Optional[List[float]], optional
+            List of ControlNet conditioning scales, by default None.
+            If None, defaults to [1.0] for each ControlNet.
         """
         self.sd_turbo = "turbo" in model_id_or_path
 
@@ -126,6 +137,10 @@ class StreamDiffusionWrapper:
                     raise ValueError(
                         "txt2img mode cannot use denoising batch with frame_buffer_size > 1."
                     )
+            if use_controlnet:
+                raise ValueError(
+                    "txt2img mode does not support ControlNet currently."
+                )
 
         if mode == "img2img":
             if not use_denoising_batch:
@@ -148,6 +163,9 @@ class StreamDiffusionWrapper:
 
         self.use_denoising_batch = use_denoising_batch
         self.use_safety_checker = use_safety_checker
+        self.use_controlnet = use_controlnet
+        self.controlnet_model_ids = controlnet_model_ids if controlnet_model_ids is not None else []
+        self.controlnet_scales = controlnet_scales
 
         self.stream: StreamDiffusion = self._load_model(
             model_id_or_path=model_id_or_path,
@@ -163,6 +181,9 @@ class StreamDiffusionWrapper:
             cfg_type=cfg_type,
             seed=seed,
             engine_dir=engine_dir,
+            use_controlnet=use_controlnet,
+            controlnet_model_ids=controlnet_model_ids,
+            controlnet_scales=controlnet_scales,
         )
 
         if device_ids is not None:
@@ -362,6 +383,9 @@ class StreamDiffusionWrapper:
         cfg_type: Literal["none", "full", "self", "initialize"] = "self",
         seed: int = 2,
         engine_dir: Optional[Union[str, Path]] = "engines",
+        use_controlnet: bool = False,
+        controlnet_model_ids: Optional[List[str]] = None,
+        controlnet_scales: Optional[List[float]] = None,
     ) -> StreamDiffusion:
         """
         Loads the model.
@@ -371,9 +395,10 @@ class StreamDiffusionWrapper:
         1. Loads the model from the model_id_or_path.
         2. Loads and fuses the LCM-LoRA model from the lcm_lora_id if needed.
         3. Loads the VAE model from the vae_id if needed.
-        4. Enables acceleration if needed.
-        5. Prepares the model for inference.
-        6. Load the safety checker if needed.
+        4. Loads ControlNet models if needed.
+        5. Enables acceleration if needed.
+        6. Prepares the model for inference.
+        7. Load the safety checker if needed.
 
         Parameters
         ----------
@@ -406,6 +431,12 @@ class StreamDiffusionWrapper:
             You cannot use anything other than "none" for txt2img mode.
         seed : int, optional
             The seed, by default 2.
+        use_controlnet : bool, optional
+            Whether to use ControlNet or not, by default False.
+        controlnet_model_ids : Optional[List[str]], optional
+            List of ControlNet model IDs to load, by default None.
+        controlnet_scales : Optional[List[float]], optional
+            List of ControlNet conditioning scales, by default None.
 
         Returns
         -------
@@ -427,6 +458,21 @@ class StreamDiffusionWrapper:
             print("Model load has failed. Doesn't exist.")
             exit()
 
+        # Load ControlNet models if specified
+        controlnet_models = []
+        if use_controlnet and controlnet_model_ids:
+            print(f"Loading {len(controlnet_model_ids)} ControlNet model(s)...")
+            for controlnet_id in controlnet_model_ids:
+                try:
+                    controlnet = ControlNetModel.from_pretrained(
+                        controlnet_id, torch_dtype=self.dtype
+                    ).to(device=self.device, dtype=self.dtype)
+                    controlnet_models.append(controlnet)
+                    print(f"Loaded ControlNet: {controlnet_id}")
+                except Exception as e:
+                    print(f"Error loading ControlNet {controlnet_id}: {str(e)}")
+                    raise
+
         stream = StreamDiffusion(
             pipe=pipe,
             t_index_list=t_index_list,
@@ -437,6 +483,9 @@ class StreamDiffusionWrapper:
             frame_buffer_size=self.frame_buffer_size,
             use_denoising_batch=self.use_denoising_batch,
             cfg_type=cfg_type,
+            use_controlnet=use_controlnet,
+            controlnet_models=controlnet_models,
+            controlnet_scales=controlnet_scales,
         )
         if not self.sd_turbo:
             if use_lcm_lora:
@@ -472,40 +521,62 @@ class StreamDiffusionWrapper:
                 from streamdiffusion.acceleration.tensorrt import (
                     TorchVAEEncoder,
                     compile_unet,
+                    compile_control_unet,
                     compile_vae_decoder,
                     compile_vae_encoder,
+                    UNet2DConditionControlNetModel,
                 )
                 from streamdiffusion.acceleration.tensorrt.engine import (
                     AutoencoderKLEngine,
                     UNet2DConditionModelEngine,
+                    UNet2DConditionControlNetModelEngine,
                 )
                 from streamdiffusion.acceleration.tensorrt.models import (
                     VAE,
                     UNet,
                     VAEEncoder,
+                    UNetWithControlNet,
                 )
 
                 def create_prefix(
                     model_id_or_path: str,
                     max_batch_size: int,
                     min_batch_size: int,
+                    use_controlnet: bool = False,
+                    num_controlnets: int = 0,
                 ):
                     maybe_path = Path(model_id_or_path)
-                    if maybe_path.exists():
-                        return f"{maybe_path.stem}--lcm_lora-{use_lcm_lora}--tiny_vae-{use_tiny_vae}--max_batch-{max_batch_size}--min_batch-{min_batch_size}--mode-{self.mode}"
-                    else:
-                        return f"{model_id_or_path}--lcm_lora-{use_lcm_lora}--tiny_vae-{use_tiny_vae}--max_batch-{max_batch_size}--min_batch-{min_batch_size}--mode-{self.mode}"
+                    base_name = maybe_path.stem if maybe_path.exists() else model_id_or_path
+                    controlnet_suffix = f"--controlnet-{num_controlnets}" if use_controlnet else ""
+                    
+                    return f"{base_name}--lcm_lora-{use_lcm_lora}--tiny_vae-{use_tiny_vae}--max_batch-{max_batch_size}--min_batch-{min_batch_size}--mode-{self.mode}{controlnet_suffix}"
 
                 engine_dir = Path(engine_dir)
-                unet_path = os.path.join(
-                    engine_dir,
-                    create_prefix(
-                        model_id_or_path=model_id_or_path,
-                        max_batch_size=stream.trt_unet_batch_size,
-                        min_batch_size=stream.trt_unet_batch_size,
-                    ),
-                    "unet.engine",
-                )
+                
+                # Use different engine paths for ControlNet vs regular UNet
+                if use_controlnet and len(controlnet_models) > 0:
+                    unet_path = os.path.join(
+                        engine_dir,
+                        create_prefix(
+                            model_id_or_path=model_id_or_path,
+                            max_batch_size=stream.trt_unet_batch_size,
+                            min_batch_size=stream.trt_unet_batch_size,
+                            use_controlnet=True,
+                            num_controlnets=len(controlnet_models),
+                        ),
+                        "controlnet_unet.engine",
+                    )
+                else:
+                    unet_path = os.path.join(
+                        engine_dir,
+                        create_prefix(
+                            model_id_or_path=model_id_or_path,
+                            max_batch_size=stream.trt_unet_batch_size,
+                            min_batch_size=stream.trt_unet_batch_size,
+                        ),
+                        "unet.engine",
+                    )
+                    
                 vae_encoder_path = os.path.join(
                     engine_dir,
                     create_prefix(
@@ -535,22 +606,45 @@ class StreamDiffusionWrapper:
 
                 if not os.path.exists(unet_path):
                     os.makedirs(os.path.dirname(unet_path), exist_ok=True)
-                    unet_model = UNet(
-                        fp16=True,
-                        device=stream.device,
-                        max_batch_size=stream.trt_unet_batch_size,
-                        min_batch_size=stream.trt_unet_batch_size,
-                        embedding_dim=stream.text_encoder.config.hidden_size,
-                        unet_dim=stream.unet.config.in_channels,
-                    )
-                    compile_unet(
-                        stream.unet,
-                        unet_model,
-                        unet_path + ".onnx",
-                        unet_path + ".opt.onnx",
-                        unet_path,
-                        opt_batch_size=stream.trt_unet_batch_size,
-                    )
+                    
+                    if use_controlnet and len(controlnet_models) > 0:
+                        # Create combined UNet+ControlNet model
+                        combined_model = UNet2DConditionControlNetModel(stream.unet, torch.nn.ModuleList(controlnet_models))
+                        unet_model = UNetWithControlNet(
+                            fp16=True,
+                            device=stream.device,
+                            num_controlnets=len(controlnet_models),
+                            max_batch_size=stream.trt_unet_batch_size,
+                            min_batch_size=stream.trt_unet_batch_size,
+                            embedding_dim=stream.text_encoder.config.hidden_size,
+                            unet_dim=stream.unet.config.in_channels,
+                        )
+                        compile_control_unet(
+                            combined_model,
+                            unet_model,
+                            unet_path + ".onnx",
+                            unet_path + ".opt.onnx",
+                            unet_path,
+                            opt_batch_size=stream.trt_unet_batch_size,
+                        )
+                    else:
+                        # Regular UNet compilation
+                        unet_model = UNet(
+                            fp16=True,
+                            device=stream.device,
+                            max_batch_size=stream.trt_unet_batch_size,
+                            min_batch_size=stream.trt_unet_batch_size,
+                            embedding_dim=stream.text_encoder.config.hidden_size,
+                            unet_dim=stream.unet.config.in_channels,
+                        )
+                        compile_unet(
+                            stream.unet,
+                            unet_model,
+                            unet_path + ".onnx",
+                            unet_path + ".opt.onnx",
+                            unet_path,
+                            opt_batch_size=stream.trt_unet_batch_size,
+                        )
 
                 if not os.path.exists(vae_decoder_path):
                     os.makedirs(os.path.dirname(vae_decoder_path), exist_ok=True)
@@ -604,9 +698,16 @@ class StreamDiffusionWrapper:
                 vae_config = stream.vae.config
                 vae_dtype = stream.vae.dtype
 
-                stream.unet = UNet2DConditionModelEngine(
-                    unet_path, cuda_stream, use_cuda_graph=False
-                )
+                # Load appropriate UNet engine
+                if use_controlnet and len(controlnet_models) > 0:
+                    stream.unet = UNet2DConditionControlNetModelEngine(
+                        unet_path, cuda_stream, use_cuda_graph=False
+                    )
+                else:
+                    stream.unet = UNet2DConditionModelEngine(
+                        unet_path, cuda_stream, use_cuda_graph=False
+                    )
+                    
                 stream.vae = AutoencoderKLEngine(
                     vae_encoder_path,
                     vae_decoder_path,

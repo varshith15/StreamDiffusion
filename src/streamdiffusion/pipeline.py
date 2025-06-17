@@ -4,7 +4,7 @@ from typing import List, Optional, Union, Any, Dict, Tuple, Literal
 import numpy as np
 import PIL.Image
 import torch
-from diffusers import LCMScheduler, StableDiffusionPipeline
+from diffusers import LCMScheduler, StableDiffusionPipeline, ControlNetModel
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import (
     retrieve_latents,
@@ -25,6 +25,9 @@ class StreamDiffusion:
         use_denoising_batch: bool = True,
         frame_buffer_size: int = 1,
         cfg_type: Literal["none", "full", "self", "initialize"] = "self",
+        use_controlnet: bool = False,
+        controlnet_models: Optional[List[ControlNetModel]] = None,
+        controlnet_scales: Optional[List[float]] = None,
     ) -> None:
         self.device = pipe.device
         self.dtype = torch_dtype
@@ -40,6 +43,25 @@ class StreamDiffusion:
         self.denoising_steps_num = len(t_index_list)
 
         self.cfg_type = cfg_type
+
+        # ControlNet support
+        self.use_controlnet = use_controlnet
+        self.controlnet_models = controlnet_models if controlnet_models is not None else []
+        self.num_controlnets = len(self.controlnet_models)
+        
+        # Set default scales if not provided
+        if controlnet_scales is None:
+            self.controlnet_scales = [1.0] * self.num_controlnets
+        else:
+            self.controlnet_scales = controlnet_scales
+        
+        # Convert to tensor for TensorRT
+        if self.use_controlnet and self.num_controlnets > 0:
+            self.controlnet_scales_tensor = torch.tensor(
+                [[scale] for scale in self.controlnet_scales], 
+                dtype=torch_dtype, 
+                device=self.device
+            )
 
         if use_denoising_batch:
             self.batch_size = self.denoising_steps_num * frame_buffer_size
@@ -300,6 +322,7 @@ class StreamDiffusion:
         x_t_latent: torch.Tensor,
         t_list: Union[torch.Tensor, list[int]],
         idx: Optional[int] = None,
+        controlnet_images: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             x_t_latent_plus_uc = torch.concat([x_t_latent[0:1], x_t_latent], dim=0)
@@ -310,12 +333,24 @@ class StreamDiffusion:
         else:
             x_t_latent_plus_uc = x_t_latent
         
-        model_pred = self.unet(
-            x_t_latent_plus_uc,
-            t_list,
-            encoder_hidden_states=self.prompt_embeds,
-            return_dict=False,
-        )[0]
+        # Handle ControlNet inputs if using ControlNet
+        if self.use_controlnet and hasattr(self.unet, '__call__') and controlnet_images is not None:
+            # For TensorRT ControlNet engine
+            model_pred = self.unet(
+                x_t_latent_plus_uc,
+                t_list,
+                encoder_hidden_states=self.prompt_embeds,
+                controlnet_images=controlnet_images,
+                controlnet_scales=self.controlnet_scales_tensor,
+            )[0]
+        else:
+            # Standard UNet call
+            model_pred = self.unet(
+                x_t_latent_plus_uc,
+                t_list,
+                encoder_hidden_states=self.prompt_embeds,
+                return_dict=False,
+            )[0]
 
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             noise_pred_text = model_pred[1:]
@@ -386,7 +421,7 @@ class StreamDiffusion:
         )[0]
         return output_latent
 
-    def predict_x0_batch(self, x_t_latent: torch.Tensor) -> torch.Tensor:
+    def predict_x0_batch(self, x_t_latent: torch.Tensor, controlnet_images: Optional[torch.Tensor] = None) -> torch.Tensor:
         prev_latent_batch = self.x_t_latent_buffer
 
         if self.use_denoising_batch:
@@ -396,7 +431,7 @@ class StreamDiffusion:
                 self.stock_noise = torch.cat(
                     (self.init_noise[0:1], self.stock_noise[:-1]), dim=0
                 )
-            x_0_pred_batch, model_pred = self.unet_step(x_t_latent, t_list)
+            x_0_pred_batch, model_pred = self.unet_step(x_t_latent, t_list, controlnet_images=controlnet_images)
 
             if self.denoising_steps_num > 1:
                 x_0_pred_out = x_0_pred_batch[-1].unsqueeze(0)
@@ -420,7 +455,7 @@ class StreamDiffusion:
                 ).repeat(
                     self.frame_bff_size,
                 )
-                x_0_pred, model_pred = self.unet_step(x_t_latent, t, idx)
+                x_0_pred, model_pred = self.unet_step(x_t_latent, t, idx, controlnet_images=controlnet_images)
                 if idx < len(self.sub_timesteps_tensor) - 1:
                     if self.do_add_noise:
                         x_t_latent = self.alpha_prod_t_sqrt[
@@ -443,6 +478,8 @@ class StreamDiffusion:
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
+        
+        controlnet_images = None
         if x is not None:
             x = self.image_processor.preprocess(x, self.height, self.width).to(
                 device=self.device, dtype=self.dtype
@@ -453,12 +490,19 @@ class StreamDiffusion:
                     time.sleep(self.inference_time_ema)
                     return self.prev_image_result
             x_t_latent = self.encode_image(x)
+            
+            # Prepare ControlNet images (use same image as control image for now)
+            if self.use_controlnet and self.num_controlnets > 0:
+                # Prepare control images with proper shape: (num_controlnets, batch_size, 3, height, width)
+                control_image = x.expand(self.batch_size, -1, -1, -1)  # (batch_size, 3, height, width)
+                controlnet_images = control_image.unsqueeze(0).expand(self.num_controlnets, -1, -1, -1, -1)  # (num_controlnets, batch_size, 3, height, width)
         else:
             # TODO: check the dimension of x_t_latent
             x_t_latent = torch.randn((1, 4, self.latent_height, self.latent_width)).to(
                 device=self.device, dtype=self.dtype
             )
-        x_0_pred_out = self.predict_x0_batch(x_t_latent)
+            
+        x_0_pred_out = self.predict_x0_batch(x_t_latent, controlnet_images)
         x_output = self.decode_image(x_0_pred_out).detach().clone()
 
         self.prev_image_result = x_output

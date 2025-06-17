@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Literal, Dict, Optional
+from typing import Literal, Dict, Optional, List
 
 import fire
 
@@ -15,18 +15,21 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 def main(
     input: str = os.path.join(CURRENT_DIR, "..", "..", "images", "inputs", "input.png"),
     output: str = os.path.join(CURRENT_DIR, "..", "..", "images", "outputs", "output.png"),
-    model_id_or_path: str = "KBlueLeaf/kohaku-v2.1",
+    model_id_or_path: str = "stabilityai/sd-turbo",
     lora_dict: Optional[Dict[str, float]] = None,
     prompt: str = "1girl with brown dog hair, thick glasses, smiling",
     negative_prompt: str = "low quality, bad quality, blurry, low resolution",
     width: int = 512,
     height: int = 512,
-    acceleration: Literal["none", "xformers", "tensorrt"] = "xformers",
+    acceleration: Literal["none", "xformers", "tensorrt"] = "tensorrt",
     use_denoising_batch: bool = True,
     guidance_scale: float = 1.2,
     cfg_type: Literal["none", "full", "self", "initialize"] = "self",
     seed: int = 2,
     delta: float = 0.5,
+    use_controlnet: bool = False,
+    controlnet_model_ids: Optional[List[str]] = None,
+    controlnet_scales: Optional[List[float]] = None,
 ):
     """
     Initializes the StreamDiffusionWrapper.
@@ -66,10 +69,23 @@ def main(
     delta : float, optional
         The delta multiplier of virtual residual noise,
         by default 1.0.
+    use_controlnet : bool, optional
+        Whether to use ControlNet or not, by default False.
+    controlnet_model_ids : Optional[List[str]], optional
+        List of ControlNet model IDs to load, by default None.
+        Example: ["thibaud/controlnet-sd21-depth-diffusers", "thibaud/controlnet-sd21-canny-diffusers"]
+    controlnet_scales : Optional[List[float]], optional
+        List of ControlNet conditioning scales, by default None.
+        If None, defaults to [1.0] for each ControlNet.
     """
 
     if guidance_scale <= 1.0:
         cfg_type = "none"
+
+    # Set default ControlNet models if enabled but no models specified
+    if use_controlnet and controlnet_model_ids is None:
+        controlnet_model_ids = ["thibaud/controlnet-sd21-depth-diffusers"]
+        print(f"Using default ControlNet model: {controlnet_model_ids}")
 
     stream = StreamDiffusionWrapper(
         model_id_or_path=model_id_or_path,
@@ -84,6 +100,9 @@ def main(
         use_denoising_batch=use_denoising_batch,
         cfg_type=cfg_type,
         seed=seed,
+        use_controlnet=use_controlnet,
+        controlnet_model_ids=controlnet_model_ids,
+        controlnet_scales=controlnet_scales,
     )
 
     stream.prepare(
