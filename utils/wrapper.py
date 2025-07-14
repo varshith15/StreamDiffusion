@@ -51,6 +51,10 @@ class StreamDiffusionWrapper:
         controlnet_model_ids: Optional[List[str]] = None,
         controlnet_scales: Optional[List[float]] = None,
         controlnet_images: Optional[List[Image.Image]] = None,
+        quantization_format: Literal["fp16", "int8", "fp8"] = "fp16",
+        calibration_image_path: str = "images/inputs/input.png", 
+        calibration_prompt: str = "elon musk",
+        calibration_steps: int = 32,
     ):
         """
         Initializes the StreamDiffusionWrapper.
@@ -128,6 +132,14 @@ class StreamDiffusionWrapper:
         controlnet_images : Optional[List[Image.Image]], optional
             List of PIL Image objects for ControlNet conditioning, by default None.
             Example: [PIL.Image.open("canny.png"), PIL.Image.open("depth.png")]
+        quantization_format : Literal["fp16", "int8", "fp8"], optional
+            The quantization format for UNet, by default "fp16" (no quantization).
+        calibration_image_path : str, optional
+            Path to calibration image for quantization, by default "images/inputs/input.png".
+        calibration_prompt : str, optional
+            Prompt for quantization calibration, by default "elon musk".
+        calibration_steps : int, optional
+            Number of calibration steps for quantization, by default 32.
         """
         self.sd_turbo = "turbo" in model_id_or_path
 
@@ -171,6 +183,12 @@ class StreamDiffusionWrapper:
         self.controlnet_model_ids = controlnet_model_ids if controlnet_model_ids is not None else []
         self.controlnet_scales = controlnet_scales
         self.controlnet_images = controlnet_images
+        
+        # Quantization settings
+        self.quantization_format = quantization_format
+        self.calibration_image_path = calibration_image_path
+        self.calibration_prompt = calibration_prompt
+        self.calibration_steps = calibration_steps
 
         self.stream: StreamDiffusion = self._load_model(
             model_id_or_path=model_id_or_path,
@@ -590,12 +608,14 @@ class StreamDiffusionWrapper:
                     min_batch_size: int,
                     use_controlnet: bool = False,
                     num_controlnets: int = 0,
+                    quantization_format: Literal["fp16", "int8", "fp8"] = "fp16",
                 ):
                     maybe_path = Path(model_id_or_path)
                     base_name = maybe_path.stem if maybe_path.exists() else model_id_or_path
                     controlnet_suffix = f"--controlnet-{num_controlnets}" if use_controlnet else ""
+                    quantization_suffix = f"--quantization-{quantization_format}" if quantization_format != "fp16" else ""
                     
-                    return f"{base_name}--lcm_lora-{use_lcm_lora}--tiny_vae-{use_tiny_vae}--max_batch-{max_batch_size}--min_batch-{min_batch_size}--mode-{self.mode}{controlnet_suffix}"
+                    return f"{base_name}--lcm_lora-{use_lcm_lora}--tiny_vae-{use_tiny_vae}--max_batch-{max_batch_size}--min_batch-{min_batch_size}--mode-{self.mode}{controlnet_suffix}{quantization_suffix}"
 
                 engine_dir = Path(engine_dir)
                 
@@ -609,6 +629,7 @@ class StreamDiffusionWrapper:
                             min_batch_size=stream.trt_unet_batch_size,
                             use_controlnet=True,
                             num_controlnets=len(controlnet_models),
+                            quantization_format=self.quantization_format,
                         ),
                         "controlnet_unet.engine",
                     )
@@ -619,6 +640,7 @@ class StreamDiffusionWrapper:
                             model_id_or_path=model_id_or_path,
                             max_batch_size=stream.trt_unet_batch_size,
                             min_batch_size=stream.trt_unet_batch_size,
+                            quantization_format=self.quantization_format,
                         ),
                         "unet.engine",
                     )
@@ -633,6 +655,7 @@ class StreamDiffusionWrapper:
                         min_batch_size=self.batch_size
                         if self.mode == "txt2img"
                         else stream.frame_bff_size,
+                        quantization_format=self.quantization_format
                     ),
                     "vae_encoder.engine",
                 )
@@ -646,6 +669,7 @@ class StreamDiffusionWrapper:
                         min_batch_size=self.batch_size
                         if self.mode == "txt2img"
                         else stream.frame_bff_size,
+                        quantization_format=self.quantization_format
                     ),
                     "vae_decoder.engine",
                 )
@@ -686,10 +710,12 @@ class StreamDiffusionWrapper:
                         compile_unet(
                             stream.unet,
                             unet_model,
+                            stream,
                             unet_path + ".onnx",
                             unet_path + ".opt.onnx",
                             unet_path,
                             opt_batch_size=stream.trt_unet_batch_size,
+                            quantization_format=self.quantization_format,
                         )
 
                 if not os.path.exists(vae_decoder_path):
@@ -778,6 +804,7 @@ class StreamDiffusionWrapper:
         except Exception:
             traceback.print_exc()
             print("Acceleration has failed. Falling back to normal mode.")
+            raise
 
         if seed < 0: # Random seed
             seed = np.random.randint(0, 1000000)

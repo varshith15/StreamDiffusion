@@ -297,9 +297,9 @@ class UNet(BaseModel):
         dtype = torch.float16 if self.fp16 else torch.float32
         return (
             torch.randn(
-                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=torch.float32, device=self.device
+                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=dtype, device=self.device
             ),
-            torch.ones((2 * batch_size,), dtype=torch.float32, device=self.device),
+            torch.ones((2 * batch_size,), dtype=dtype, device=self.device),
             torch.randn(2 * batch_size, self.text_maxlen, self.embedding_dim, dtype=dtype, device=self.device),
         )
 
@@ -396,14 +396,14 @@ class UNetWithControlNet(BaseModel):
         dtype = torch.float16 if self.fp16 else torch.float32
         return (
             torch.randn(
-                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=torch.float32, device=self.device
+                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=dtype, device=self.device
             ),
-            torch.ones((2 * batch_size,), dtype=torch.float32, device=self.device),
+            torch.ones((2 * batch_size,), dtype=dtype, device=self.device),
             torch.randn(2 * batch_size, self.text_maxlen, self.embedding_dim, dtype=dtype, device=self.device),
             torch.randn(
                 self.num_controlnets, 2 * batch_size, 3, image_height, image_width, dtype=dtype, device=self.device
             ),
-            torch.randn(self.num_controlnets, 1, dtype=torch.float32, device=self.device),
+            torch.randn(self.num_controlnets, 1, dtype=dtype, device=self.device),
         )
     
     def optimize(self, onnx_graph):
@@ -480,7 +480,7 @@ class VAE(BaseModel):
             4,
             latent_height,
             latent_width,
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=self.device,
         )
 
@@ -547,6 +547,6 @@ class VAEEncoder(BaseModel):
             3,
             image_height,
             image_width,
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=self.device,
         )

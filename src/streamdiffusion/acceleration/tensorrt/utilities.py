@@ -210,6 +210,11 @@ class Engine:
         enable_all_tactics=False,
         timing_cache=None,
         workspace_size=0,
+        # Quantization parameters
+        int8=None,
+        fp8=None,
+        strongly_typed=None,
+        precision_constraints=None,
     ):
         print(f"Building TensorRT engine for {onnx_path}: {self.engine_path}")
         p = Profile()
@@ -226,9 +231,9 @@ class Engine:
             config_kwargs["tactic_sources"] = []
 
         engine = engine_from_network(
-            network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
+            network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM], strongly_typed=strongly_typed),
             config=CreateConfig(
-                fp16=fp16, refittable=enable_refit, profiles=[p], load_timing_cache=timing_cache, **config_kwargs
+                fp16=fp16, int8=int8, fp8=fp8, precision_constraints=precision_constraints, refittable=enable_refit, profiles=[p], load_timing_cache=timing_cache, **config_kwargs
             ),
             save_timing_cache=timing_cache,
         )
@@ -387,6 +392,11 @@ def build_engine(
     build_dynamic_shape: bool = False,
     build_all_tactics: bool = False,
     build_enable_refit: bool = False,
+    # Quantization parameters
+    int8: bool = None,
+    fp8: bool = None,
+    strongly_typed: bool = None,
+    precision_constraints: str = None,
 ):
     _, free_mem, _ = cudart.cudaMemGetInfo()
     GiB = 2**30
@@ -410,6 +420,11 @@ def build_engine(
         enable_refit=build_enable_refit,
         enable_all_tactics=build_all_tactics,
         workspace_size=max_workspace_size,
+        # Pass quantization parameters
+        int8=int8,
+        fp8=fp8,
+        strongly_typed=strongly_typed,
+        precision_constraints=precision_constraints,
     )
 
     return engine
@@ -424,7 +439,7 @@ def export_onnx(
     opt_batch_size: int,
     onnx_opset: int,
 ):
-    with torch.inference_mode(), torch.autocast("cuda"):
+    with torch.inference_mode():
         inputs = model_data.get_sample_input(opt_batch_size, opt_image_height, opt_image_width)
         torch.onnx.export(
             model,

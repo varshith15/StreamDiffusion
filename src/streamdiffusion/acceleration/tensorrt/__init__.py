@@ -116,32 +116,46 @@ def compile_vae_decoder(
 def compile_unet(
     unet: UNet2DConditionModel,
     model_data: BaseModel,
+    pipe: StreamDiffusion,
     onnx_path: str,
     onnx_opt_path: str,
     engine_path: str,
     opt_batch_size: int = 1,
     engine_build_options: dict = {},
+    quantization_format: str = "fp16",
 ):
     unet = unet.to(torch.device("cuda"), dtype=torch.float16)
     builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
+    if quantization_format in ["int8", "fp8"]:
+        engine_build_options[quantization_format] = True
+
     builder.build(
         onnx_path,
         onnx_opt_path,
         engine_path,
         opt_batch_size=opt_batch_size,
+        pipe=pipe,
         **engine_build_options,
     )
 
 def compile_control_unet(
     unet: UNet2DConditionControlNetModel,
     model_data: BaseModel,
+    pipe: StreamDiffusion,
     onnx_path: str,
     onnx_opt_path: str,
     engine_path: str,
     opt_batch_size: int = 1,
     engine_build_options: dict = {},
+    quantization_format: str = "fp16",
 ):
     unet = unet.to(torch.device("cuda"), dtype=torch.float16)
+    
+    # Apply quantization-specific build options
+    if quantization_format in ["int8", "fp8"]:
+        from .quantization import prepare_for_tensorrt_build
+        quant_build_params = prepare_for_tensorrt_build(unet, quantization_format)
+        engine_build_options.update(quant_build_params)
     
     builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
     builder.build(

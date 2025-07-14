@@ -12,6 +12,7 @@ from .utilities import (
     export_onnx,
     optimize_onnx,
 )
+from ...pipeline import StreamDiffusion
 
 
 def create_onnx_path(name, onnx_dir, opt=True):
@@ -48,7 +49,17 @@ class EngineBuilder:
         force_engine_build: bool = False,
         force_onnx_export: bool = False,
         force_onnx_optimize: bool = False,
+        pipe: StreamDiffusion = None,
+        int8: bool = None,
+        fp8: bool = None,
+        strongly_typed: bool = None,
+        precision_constraints: str = None,
     ):
+        if int8 or fp8:
+            from .quantization import quantize
+            pipe.unet = self.network
+            self.network = quantize(pipe, int8, fp8)
+            
         if not force_onnx_export and os.path.exists(onnx_path):
             print(f"Found cached model: {onnx_path}")
         else:
@@ -92,6 +103,11 @@ class EngineBuilder:
                 build_dynamic_shape=build_dynamic_shape,
                 build_all_tactics=build_all_tactics,
                 build_enable_refit=build_enable_refit,
+                # Pass quantization parameters
+                int8=int8,
+                fp8=fp8,
+                strongly_typed=strongly_typed,
+                precision_constraints=precision_constraints,
             )
 
         gc.collect()

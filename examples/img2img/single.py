@@ -29,7 +29,7 @@ def main(
     cfg_type: Literal["none", "full", "self", "initialize"] = "self",
     seed: int = 2,
     delta: float = 0.5,
-    use_controlnet: bool = True,
+    use_controlnet: bool = False,
     controlnet_model_ids: Optional[List[str]] = ["thibaud/controlnet-sd21-depth-diffusers"],
     controlnet_scales: Optional[List[float]] = [0.5],
     controlnet_image_paths: Optional[List[str]] = None,
@@ -131,6 +131,7 @@ def main(
         controlnet_model_ids=controlnet_model_ids,
         controlnet_scales=controlnet_scales,
         controlnet_images=controlnet_images,
+        quantization_format="int8",
     )
 
     stream.prepare(
@@ -142,6 +143,11 @@ def main(
     )
 
     image_tensor = stream.preprocess_image(input)
+
+    for _ in range(stream.batch_size - 1):
+            stream(image=image_tensor)
+
+    output_image = stream(image=image_tensor)
 
     st = time.time()
     for _ in range(20):
