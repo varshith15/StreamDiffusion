@@ -30,6 +30,8 @@ def compile_vae_encoder(
     onnx_opt_path: str,
     engine_path: str,
     opt_batch_size: int = 1,
+    opt_image_height: int = 512,
+    opt_image_width: int = 512,
     engine_build_options: dict = {},
 ):
     builder = EngineBuilder(model_data, vae, device=torch.device("cuda"))
@@ -38,6 +40,8 @@ def compile_vae_encoder(
         onnx_opt_path,
         engine_path,
         opt_batch_size=opt_batch_size,
+        opt_image_height=opt_image_height,
+        opt_image_width=opt_image_width,
         **engine_build_options,
     )
 
@@ -49,6 +53,8 @@ def compile_vae_decoder(
     onnx_opt_path: str,
     engine_path: str,
     opt_batch_size: int = 1,
+    opt_image_height: int = 512,
+    opt_image_width: int = 512,
     engine_build_options: dict = {},
 ):
     vae = vae.to(torch.device("cuda"))
@@ -58,6 +64,8 @@ def compile_vae_decoder(
         onnx_opt_path,
         engine_path,
         opt_batch_size=opt_batch_size,
+        opt_image_height=opt_image_height,
+        opt_image_width=opt_image_width,
         **engine_build_options,
     )
 
@@ -68,6 +76,8 @@ def compile_unet(
     onnx_path: str,
     onnx_opt_path: str,
     engine_path: str,
+    opt_image_height: int = 512,
+    opt_image_width: int = 512,
     opt_batch_size: int = 1,
     engine_build_options: dict = {},
 ):
@@ -78,6 +88,8 @@ def compile_unet(
         onnx_opt_path,
         engine_path,
         opt_batch_size=opt_batch_size,
+        opt_image_height=opt_image_height,
+        opt_image_width=opt_image_width,
         **engine_build_options,
     )
 

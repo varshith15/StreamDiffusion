@@ -94,9 +94,11 @@ def main(
         delta=delta,
     )
 
-    image_tensor = stream.preprocess_image(input)
+    st_preprocess = time.time()
+    for _ in range(50):
+        image_tensor = stream.preprocess_image(input)
+    end_preprocess = time.time()
 
-    
     for _ in range(5):
         for _ in range(stream.batch_size - 1):
             stream(image=image_tensor)
@@ -107,8 +109,11 @@ def main(
         for _ in range(stream.batch_size - 1):
             stream(image=image_tensor)
         output_image = stream(image=image_tensor)
-    print(f"Time taken: {time.time() - st}")
-    print(f"FPS: {(20 * stream.batch_size) / (time.time() - st)}")
+    
+    print(f"Preprocess time taken: {end_preprocess - st_preprocess}")
+    print(f"Preprocess Latency: {(end_preprocess - st_preprocess) / 50}")
+    print(f"Inference time taken: {time.time() - st}")
+    print(f"Inference FPS: {20 * stream.batch_size / (time.time() - st)}")
 
     output_image.save(output)
 

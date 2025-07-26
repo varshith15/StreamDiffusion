@@ -253,8 +253,6 @@ class UNet(BaseModel):
             "sample": {0: "2B", 2: "H", 3: "W"},
             "timestep": {0: "2B"},
             "encoder_hidden_states": {0: "2B"},
-            "text_embeds": {0: "2B"},
-            "time_ids": {0: "2B"},
             "latent": {0: "2B", 2: "H", 3: "W"},
         }
 
@@ -283,13 +281,7 @@ class UNet(BaseModel):
                 (min_batch, self.text_maxlen, self.embedding_dim),
                 (batch_size, self.text_maxlen, self.embedding_dim),
                 (max_batch, self.text_maxlen, self.embedding_dim),
-            ],
-            "text_embeds": [
-                (min_batch, 1280),
-                (batch_size, 1280),
-                (max_batch, 1280),
-            ],
-            "time_ids": [(min_batch, 6), (batch_size, 6), (max_batch, 6)],
+            ]
         }
 
     def get_shape_dict(self, batch_size, image_height, image_width):
@@ -298,8 +290,8 @@ class UNet(BaseModel):
             "sample": (2 * batch_size, self.unet_dim, latent_height, latent_width),
             "timestep": (2 * batch_size,),
             "encoder_hidden_states": (2 * batch_size, self.text_maxlen, self.embedding_dim),
-            "text_embeds": (2 * batch_size, 1280),
-            "time_ids": (2 * batch_size, 6),
+            "text_embeds": (1, 1280),
+            "time_ids": (1, 6),
             "latent": (2 * batch_size, 4, latent_height, latent_width),
         }
 
@@ -314,8 +306,8 @@ class UNet(BaseModel):
             torch.randn(2 * batch_size, self.text_maxlen, self.embedding_dim, dtype=dtype, device=self.device),
             {
                 "added_cond_kwargs" : {
-                    "text_embeds": torch.randn(2 * batch_size, 1280, dtype=dtype, device=self.device),
-                    "time_ids": torch.randn(2 * batch_size, 6, dtype=dtype, device=self.device),
+                    "text_embeds": torch.randn(1, 1280, dtype=dtype, device=self.device),
+                    "time_ids": torch.randn(1, 6, dtype=dtype, device=self.device),
                 }
             },
         )

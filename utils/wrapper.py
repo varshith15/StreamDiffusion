@@ -576,6 +576,9 @@ class StreamDiffusionWrapper:
                         unet_path + ".opt.onnx",
                         unet_path,
                         opt_batch_size=stream.trt_unet_batch_size,
+                        opt_image_height=self.height,
+                        opt_image_width=self.width,
+
                     )
 
                 if not os.path.exists(vae_decoder_path):
@@ -599,6 +602,8 @@ class StreamDiffusionWrapper:
                         opt_batch_size=self.batch_size
                         if self.mode == "txt2img"
                         else stream.frame_bff_size,
+                        opt_image_height=self.height,
+                        opt_image_width=self.width,
                     )
                     delattr(stream.vae, "forward")
 
@@ -623,6 +628,8 @@ class StreamDiffusionWrapper:
                         opt_batch_size=self.batch_size
                         if self.mode == "txt2img"
                         else stream.frame_bff_size,
+                        opt_image_height=self.height,
+                        opt_image_width=self.width,
                     )
 
                 cuda_steram = cuda.Stream()
