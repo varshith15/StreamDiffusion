@@ -330,7 +330,9 @@ class StreamDiffusion:
             x_t_latent_plus_uc,
             t_list,
             encoder_hidden_states=self.prompt_embeds,
-            added_cond_kwargs=added_cond_kwargs,
+            # added_cond_kwargs=added_cond_kwargs,
+            text_embeds=added_cond_kwargs["text_embeds"],
+            time_ids=added_cond_kwargs["time_ids"],
             return_dict=False,
         )[0]
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
@@ -392,9 +394,9 @@ class StreamDiffusion:
         add_time_ids = list(original_size + crops_coords_top_left + target_size)
 
         passed_add_embed_dim = (
-            self.unet.config.addition_time_embed_dim * len(add_time_ids) + text_encoder_projection_dim
+            self.pipe.unet.config.addition_time_embed_dim * len(add_time_ids) + text_encoder_projection_dim
         )
-        expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
+        expected_add_embed_dim = self.pipe.unet.add_embedding.linear_1.in_features
 
         if expected_add_embed_dim != passed_add_embed_dim:
             raise ValueError(

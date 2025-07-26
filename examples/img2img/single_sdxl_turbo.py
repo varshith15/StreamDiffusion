@@ -3,7 +3,7 @@ import sys
 from typing import Literal, Dict, Optional
 
 import fire
-
+import time
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -13,19 +13,19 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def main(
-    input: str = os.path.join(CURRENT_DIR, "..", "..", "images", "inputs", "input.png"),
+    input: str = os.path.join(CURRENT_DIR, "..", "..", "images", "inputs", "xilin_img.png"),
     output: str = os.path.join(CURRENT_DIR, "..", "..", "images", "outputs", "output.png"),
     model_id_or_path: str = "stabilityai/sdxl-turbo",
     lora_dict: Optional[Dict[str, float]] = None,
-    prompt: str = "1girl with brown dog hair, thick glasses, smiling",
-    negative_prompt: str = "low quality, bad quality, blurry, low resolution",
-    width: int = 512,
-    height: int = 512,
-    acceleration: Literal["none", "xformers", "tensorrt"] = "none",
+    prompt: str = "Naruto Uzumaki from the Naruto anime, spiky blond hair, orange ninja outfit with blue accents, blue headband with Konoha leaf symbol, cinematic anime style, energetic action pose, high detail, vibrant colors, dramatic lighting",
+    negative_prompt: str = "black and white, blurry, low resolution, pixelated, pixel art, low quality, low fidelity",
+    width: int = 1024,
+    height: int = 1024,
+    acceleration: Literal["none", "xformers", "tensorrt"] = "tensorrt",
     use_denoising_batch: bool = True,
     guidance_scale: float = 0.0,
     cfg_type: Literal["none", "full", "self", "initialize"] = "self",
-    seed: int = 2,
+    seed: int = 478,
     delta: float = 0.5,
 ):
     """
@@ -74,7 +74,7 @@ def main(
     stream = StreamDiffusionWrapper(
         model_id_or_path=model_id_or_path,
         lora_dict=lora_dict,
-        t_index_list=[1],
+        t_index_list=[20, 45],
         frame_buffer_size=1,
         width=width,
         height=height,
@@ -89,17 +89,27 @@ def main(
     stream.prepare(
         prompt=prompt,
         negative_prompt=negative_prompt,
-        num_inference_steps=2,
+        num_inference_steps=50,
         guidance_scale=guidance_scale,
         delta=delta,
     )
 
     image_tensor = stream.preprocess_image(input)
 
-    for _ in range(stream.batch_size - 1):
-        stream(image=image_tensor)
+    
+    for _ in range(5):
+        for _ in range(stream.batch_size - 1):
+            stream(image=image_tensor)
+        _ = stream(image=image_tensor)
 
-    output_image = stream(image=image_tensor)
+    st = time.time()
+    for _ in range(20):
+        for _ in range(stream.batch_size - 1):
+            stream(image=image_tensor)
+        output_image = stream(image=image_tensor)
+    print(f"Time taken: {time.time() - st}")
+    print(f"FPS: {(20 * stream.batch_size) / (time.time() - st)}")
+
     output_image.save(output)
 
 

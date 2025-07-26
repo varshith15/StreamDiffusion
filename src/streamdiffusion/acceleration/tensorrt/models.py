@@ -53,10 +53,11 @@ class Optimizer:
 
     def infer_shapes(self, return_onnx=False):
         onnx_graph = gs.export_onnx(self.graph)
-        if onnx_graph.ByteSize() > 2147483648:
-            raise TypeError("ERROR: model size exceeds supported 2GB limit")
-        else:
-            onnx_graph = shape_inference.infer_shapes(onnx_graph)
+        # if onnx_graph.ByteSize() > 2147483648:
+        #     raise TypeError("ERROR: model size exceeds supported 2GB limit")
+        # else:
+        #     onnx_graph = shape_inference.infer_shapes(onnx_graph)
+        onnx_graph = shape_inference.infer_shapes(onnx_graph)
 
         self.graph = gs.import_onnx(onnx_graph)
         if return_onnx:
@@ -242,7 +243,7 @@ class UNet(BaseModel):
         self.name = "UNet"
 
     def get_input_names(self):
-        return ["sample", "timestep", "encoder_hidden_states"]
+        return ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"]
 
     def get_output_names(self):
         return ["latent"]
@@ -252,6 +253,8 @@ class UNet(BaseModel):
             "sample": {0: "2B", 2: "H", 3: "W"},
             "timestep": {0: "2B"},
             "encoder_hidden_states": {0: "2B"},
+            "text_embeds": {0: "2B"},
+            "time_ids": {0: "2B"},
             "latent": {0: "2B", 2: "H", 3: "W"},
         }
 
@@ -281,6 +284,12 @@ class UNet(BaseModel):
                 (batch_size, self.text_maxlen, self.embedding_dim),
                 (max_batch, self.text_maxlen, self.embedding_dim),
             ],
+            "text_embeds": [
+                (min_batch, 1280),
+                (batch_size, 1280),
+                (max_batch, 1280),
+            ],
+            "time_ids": [(min_batch, 6), (batch_size, 6), (max_batch, 6)],
         }
 
     def get_shape_dict(self, batch_size, image_height, image_width):
@@ -289,6 +298,8 @@ class UNet(BaseModel):
             "sample": (2 * batch_size, self.unet_dim, latent_height, latent_width),
             "timestep": (2 * batch_size,),
             "encoder_hidden_states": (2 * batch_size, self.text_maxlen, self.embedding_dim),
+            "text_embeds": (2 * batch_size, 1280),
+            "time_ids": (2 * batch_size, 6),
             "latent": (2 * batch_size, 4, latent_height, latent_width),
         }
 
@@ -297,11 +308,32 @@ class UNet(BaseModel):
         dtype = torch.float16 if self.fp16 else torch.float32
         return (
             torch.randn(
-                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=torch.float32, device=self.device
+                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=dtype, device=self.device
             ),
-            torch.ones((2 * batch_size,), dtype=torch.float32, device=self.device),
+            torch.ones((2 * batch_size,), dtype=dtype, device=self.device),
             torch.randn(2 * batch_size, self.text_maxlen, self.embedding_dim, dtype=dtype, device=self.device),
+            {
+                "added_cond_kwargs" : {
+                    "text_embeds": torch.randn(2 * batch_size, 1280, dtype=dtype, device=self.device),
+                    "time_ids": torch.randn(2 * batch_size, 6, dtype=dtype, device=self.device),
+                }
+            },
         )
+
+    def optimize(self, onnx_graph):
+        opt = Optimizer(onnx_graph, verbose=self.verbose)
+        opt.info(self.name + ": original")
+        opt.cleanup()
+        opt.info(self.name + ": cleanup")
+        opt.fold_constants()
+        opt.info(self.name + ": fold constants")
+        # Skip shape inference for ControlNet models to avoid corruption
+        # opt.infer_shapes()
+        # opt.info(self.name + ": shape inference")
+        print("Skipping shape inference for ControlNet models to avoid corruption")
+        onnx_opt_graph = opt.cleanup(return_onnx=True)
+        opt.info(self.name + ": finished")
+        return onnx_opt_graph
 
 
 class VAE(BaseModel):

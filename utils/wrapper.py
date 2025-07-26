@@ -566,7 +566,7 @@ class StreamDiffusionWrapper:
                         device=stream.device,
                         max_batch_size=stream.trt_unet_batch_size,
                         min_batch_size=stream.trt_unet_batch_size,
-                        embedding_dim=stream.text_encoder.config.hidden_size,
+                        embedding_dim=stream.unet.config.cross_attention_dim,
                         unet_dim=stream.unet.config.in_channels,
                     )
                     compile_unet(
