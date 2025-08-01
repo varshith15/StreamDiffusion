@@ -1,7 +1,9 @@
 import os
 import sys
 from typing import Literal, Dict, Optional
-
+from PIL import Image
+import torch
+import numpy as np
 import fire
 import time
 
@@ -74,7 +76,7 @@ def main(
     stream = StreamDiffusionWrapper(
         model_id_or_path=model_id_or_path,
         lora_dict=lora_dict,
-        t_index_list=[20, 45],
+        t_index_list=[20],
         frame_buffer_size=1,
         width=width,
         height=height,
@@ -84,6 +86,7 @@ def main(
         use_denoising_batch=use_denoising_batch,
         cfg_type=cfg_type,
         seed=seed,
+        output_type="pt",
     )
 
     stream.prepare(
@@ -94,9 +97,13 @@ def main(
         delta=delta,
     )
 
+    image = Image.open(input).convert("RGB").resize((width, height))
+    image_tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).unsqueeze(0).float().cuda()
+    image_tensor = image_tensor / 255.0
+
     st_preprocess = time.time()
     for _ in range(50):
-        image_tensor = stream.preprocess_image(input)
+        image_tensor = stream.preprocess_tensor(image_tensor)
     end_preprocess = time.time()
 
     for _ in range(5):
@@ -108,12 +115,18 @@ def main(
     for _ in range(20):
         for _ in range(stream.batch_size - 1):
             stream(image=image_tensor)
-        output_image = stream(image=image_tensor)
+        output_tensor = stream(image=image_tensor)
     
     print(f"Preprocess time taken: {end_preprocess - st_preprocess}")
     print(f"Preprocess Latency: {(end_preprocess - st_preprocess) / 50}")
     print(f"Inference time taken: {time.time() - st}")
     print(f"Inference FPS: {20 * stream.batch_size / (time.time() - st)}")
+
+
+    
+    output_numpy = output_tensor.cpu().permute(1, 2, 0).float().numpy()
+    output_numpy = (output_numpy * 255).round().astype("uint8")
+    output_image = Image.fromarray(output_numpy)
 
     output_image.save(output)
 

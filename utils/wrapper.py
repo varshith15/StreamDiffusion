@@ -1,4 +1,5 @@
 import gc
+import time
 import os
 from pathlib import Path
 import traceback
@@ -298,8 +299,11 @@ class StreamDiffusionWrapper:
 
         if isinstance(image, str) or isinstance(image, Image.Image):
             image = self.preprocess_image(image)
+        elif isinstance(image, torch.Tensor):
+            image = self.preprocess_tensor(image)
 
         image_tensor = self.stream(image)
+
         image = self.postprocess_image(image_tensor, output_type=self.output_type)
 
         if self.use_safety_checker:
@@ -333,6 +337,11 @@ class StreamDiffusionWrapper:
         if isinstance(image, Image.Image):
             image = image.convert("RGB").resize((self.width, self.height))
 
+        return self.stream.image_processor.preprocess(
+            image, self.height, self.width
+        ).to(device=self.device, dtype=self.dtype)
+
+    def preprocess_tensor(self, image: torch.Tensor) -> torch.Tensor:
         return self.stream.image_processor.preprocess(
             image, self.height, self.width
         ).to(device=self.device, dtype=self.dtype)
@@ -604,6 +613,11 @@ class StreamDiffusionWrapper:
                         else stream.frame_bff_size,
                         opt_image_height=self.height,
                         opt_image_width=self.width,
+                        engine_build_options={
+                            'build_dynamic_shape': True,
+                            'min_image_resolution': 384,
+                            'max_image_resolution': 1024,
+                        }
                     )
                     delattr(stream.vae, "forward")
 
